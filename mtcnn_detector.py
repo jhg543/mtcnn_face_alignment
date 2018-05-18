@@ -1,13 +1,15 @@
 # coding: utf-8
 import os
+from itertools import repeat
+from multiprocessing import Pool
+
+import cv2
 import mxnet as mx
 import numpy as np
-import math
-import cv2
-from multiprocessing import Pool
-from itertools import repeat
-from itertools import izip
-from helper import nms, adjust_input, generate_bbox, detect_first_stage_warpper
+from skimage import transform
+
+from helper import nms, adjust_input, detect_first_stage_warpper
+
 
 class MtcnnDetector(object):
     """
@@ -15,13 +17,14 @@ class MtcnnDetector(object):
         see https://github.com/kpzhang93/MTCNN_face_detection_alignment
         this is a mxnet version
     """
+
     def __init__(self,
                  model_folder='.',
-                 minsize = 20,
-                 threshold = [0.6, 0.7, 0.8],
-                 factor = 0.709,
-                 num_worker = 1,
-                 accurate_landmark = False,
+                 minsize=20,
+                 threshold=[0.6, 0.7, 0.8],
+                 factor=0.709,
+                 num_worker=1,
+                 accurate_landmark=False,
                  ctx=mx.cpu()):
         """
             Initialize the detector
@@ -46,13 +49,13 @@ class MtcnnDetector(object):
         self.accurate_landmark = accurate_landmark
 
         # load 4 models from folder
-        models = ['det1', 'det2', 'det3','det4']
-        models = [ os.path.join(model_folder, f) for f in models]
-        
+        models = ['det1', 'det2', 'det3', 'det4']
+        models = [os.path.join(model_folder, f) for f in models]
+
         self.PNets = []
         for i in range(num_worker):
-            workner_net = mx.model.FeedForward.load(models[0], 1, ctx=ctx)
-            self.PNets.append(workner_net)
+            worker_net = mx.model.FeedForward.load(models[0], 1, ctx=ctx)
+            self.PNets.append(worker_net)
 
         self.Pool = Pool(num_worker)
 
@@ -60,10 +63,9 @@ class MtcnnDetector(object):
         self.ONet = mx.model.FeedForward.load(models[2], 1, ctx=ctx)
         self.LNet = mx.model.FeedForward.load(models[3], 1, ctx=ctx)
 
-        self.minsize   = float(minsize)
-        self.factor    = float(factor)
+        self.minsize = float(minsize)
+        self.factor = float(factor)
         self.threshold = threshold
-
 
     def convert_to_square(self, bbox):
         """
@@ -82,9 +84,9 @@ class MtcnnDetector(object):
 
         h = bbox[:, 3] - bbox[:, 1] + 1
         w = bbox[:, 2] - bbox[:, 0] + 1
-        max_side = np.maximum(h,w)
-        square_bbox[:, 0] = bbox[:, 0] + w*0.5 - max_side*0.5
-        square_bbox[:, 1] = bbox[:, 1] + h*0.5 - max_side*0.5
+        max_side = np.maximum(h, w)
+        square_bbox[:, 0] = bbox[:, 0] + w * 0.5 - max_side * 0.5
+        square_bbox[:, 1] = bbox[:, 1] + h * 0.5 - max_side * 0.5
         square_bbox[:, 2] = square_bbox[:, 0] + max_side - 1
         square_bbox[:, 3] = square_bbox[:, 1] + max_side - 1
         return square_bbox
@@ -114,7 +116,6 @@ class MtcnnDetector(object):
         bbox[:, 0:4] = bbox[:, 0:4] + aug
         return bbox
 
- 
     def pad(self, bboxes, w, h):
         """
             pad the the bboxes, alse restrict the size of it
@@ -141,19 +142,19 @@ class MtcnnDetector(object):
                 height and width of the bbox
 
         """
-        tmpw, tmph = bboxes[:, 2] - bboxes[:, 0] + 1,  bboxes[:, 3] - bboxes[:, 1] + 1
+        tmpw, tmph = bboxes[:, 2] - bboxes[:, 0] + 1, bboxes[:, 3] - bboxes[:, 1] + 1
         num_box = bboxes.shape[0]
 
-        dx , dy= np.zeros((num_box, )), np.zeros((num_box, ))
-        edx, edy  = tmpw.copy()-1, tmph.copy()-1
+        dx, dy = np.zeros((num_box,)), np.zeros((num_box,))
+        edx, edy = tmpw.copy() - 1, tmph.copy() - 1
 
         x, y, ex, ey = bboxes[:, 0], bboxes[:, 1], bboxes[:, 2], bboxes[:, 3]
 
-        tmp_index = np.where(ex > w-1)
+        tmp_index = np.where(ex > w - 1)
         edx[tmp_index] = tmpw[tmp_index] + w - 2 - ex[tmp_index]
         ex[tmp_index] = w - 1
 
-        tmp_index = np.where(ey > h-1)
+        tmp_index = np.where(ey > h - 1)
         edy[tmp_index] = tmph[tmp_index] + h - 2 - ey[tmp_index]
         ey[tmp_index] = h - 1
 
@@ -168,7 +169,7 @@ class MtcnnDetector(object):
         return_list = [dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph]
         return_list = [item.astype(np.int32) for item in return_list]
 
-        return  return_list
+        return return_list
 
     def slice_index(self, number):
         """
@@ -178,13 +179,14 @@ class MtcnnDetector(object):
             number: int number
                 number
         """
+
         def chunks(l, n):
             """Yield successive n-sized chunks from l."""
             for i in range(0, len(l), n):
                 yield l[i:i + n]
+
         num_list = range(number)
         return list(chunks(num_list, self.num_worker))
-        
 
     def detect_face(self, img):
         """
@@ -215,39 +217,40 @@ class MtcnnDetector(object):
         total_boxes = []
 
         height, width, _ = img.shape
-        minl = min( height, width)
+        minl = min(height, width)
 
         # get all the valid scales
         scales = []
-        m = MIN_DET_SIZE/self.minsize
+        m = MIN_DET_SIZE / self.minsize
         minl *= m
         factor_count = 0
         while minl > MIN_DET_SIZE:
-            scales.append(m*self.factor**factor_count)
+            scales.append(m * self.factor ** factor_count)
             minl *= self.factor
             factor_count += 1
 
         #############################################
         # first stage
         #############################################
-        #for scale in scales:
+        # for scale in scales:
         #    return_boxes = self.detect_first_stage(img, scale, 0)
         #    if return_boxes is not None:
         #        total_boxes.append(return_boxes)
-        
+
         sliced_index = self.slice_index(len(scales))
         total_boxes = []
         for batch in sliced_index:
-            local_boxes = self.Pool.map( detect_first_stage_warpper, \
-                    izip(repeat(img), self.PNets[:len(batch)], [scales[i] for i in batch], repeat(self.threshold[0])) )
+            local_boxes = self.Pool.map(detect_first_stage_warpper,
+                                        zip(repeat(img), self.PNets[:len(batch)], [scales[i] for i in batch],
+                                            repeat(self.threshold[0])))
             total_boxes.extend(local_boxes)
-        
+
         # remove the Nones 
-        total_boxes = [ i for i in total_boxes if i is not None]
+        total_boxes = [i for i in total_boxes if i is not None]
 
         if len(total_boxes) == 0:
             return None
-        
+
         total_boxes = np.vstack(total_boxes)
 
         if total_boxes.size == 0:
@@ -261,10 +264,10 @@ class MtcnnDetector(object):
         bbh = total_boxes[:, 3] - total_boxes[:, 1] + 1
 
         # refine the bboxes
-        total_boxes = np.vstack([total_boxes[:, 0]+total_boxes[:, 5] * bbw,
-                                 total_boxes[:, 1]+total_boxes[:, 6] * bbh,
-                                 total_boxes[:, 2]+total_boxes[:, 7] * bbw,
-                                 total_boxes[:, 3]+total_boxes[:, 8] * bbh,
+        total_boxes = np.vstack([total_boxes[:, 0] + total_boxes[:, 5] * bbw,
+                                 total_boxes[:, 1] + total_boxes[:, 6] * bbh,
+                                 total_boxes[:, 2] + total_boxes[:, 7] * bbw,
+                                 total_boxes[:, 3] + total_boxes[:, 8] * bbh,
                                  total_boxes[:, 4]
                                  ])
 
@@ -284,7 +287,7 @@ class MtcnnDetector(object):
 
         for i in range(num_box):
             tmp = np.zeros((tmph[i], tmpw[i], 3), dtype=np.uint8)
-            tmp[dy[i]:edy[i]+1, dx[i]:edx[i]+1, :] = img[y[i]:ey[i]+1, x[i]:ex[i]+1, :]
+            tmp[dy[i]:edy[i] + 1, dx[i]:edx[i] + 1, :] = img[y[i]:ey[i] + 1, x[i]:ex[i] + 1, :]
             input_buf[i, :, :, :] = adjust_input(cv2.resize(tmp, (24, 24)))
 
         output = self.RNet.predict(input_buf)
@@ -318,7 +321,7 @@ class MtcnnDetector(object):
 
         for i in range(num_box):
             tmp = np.zeros((tmph[i], tmpw[i], 3), dtype=np.float32)
-            tmp[dy[i]:edy[i]+1, dx[i]:edx[i]+1, :] = img[y[i]:ey[i]+1, x[i]:ex[i]+1, :]
+            tmp[dy[i]:edy[i] + 1, dx[i]:edx[i] + 1, :] = img[y[i]:ey[i] + 1, x[i]:ex[i] + 1, :]
             input_buf[i, :, :, :] = adjust_input(cv2.resize(tmp, (48, 48)))
 
         output = self.ONet.predict(input_buf)
@@ -345,7 +348,7 @@ class MtcnnDetector(object):
         pick = nms(total_boxes, 0.7, 'Min')
         total_boxes = total_boxes[pick]
         points = points[pick]
-        
+
         if not self.accurate_landmark:
             return total_boxes, points
 
@@ -353,23 +356,23 @@ class MtcnnDetector(object):
         # extended stage
         #############################################
         num_box = total_boxes.shape[0]
-        patchw = np.maximum(total_boxes[:, 2]-total_boxes[:, 0]+1, total_boxes[:, 3]-total_boxes[:, 1]+1)
-        patchw = np.round(patchw*0.25)
+        patchw = np.maximum(total_boxes[:, 2] - total_boxes[:, 0] + 1, total_boxes[:, 3] - total_boxes[:, 1] + 1)
+        patchw = np.round(patchw * 0.25)
 
         # make it even
-        patchw[np.where(np.mod(patchw,2) == 1)] += 1
+        patchw[np.where(np.mod(patchw, 2) == 1)] += 1
 
         input_buf = np.zeros((num_box, 15, 24, 24), dtype=np.float32)
         for i in range(5):
-            x, y = points[:, i], points[:, i+5]
-            x, y = np.round(x-0.5*patchw), np.round(y-0.5*patchw)
-            [dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph] = self.pad(np.vstack([x, y, x+patchw-1, y+patchw-1]).T,
+            x, y = points[:, i], points[:, i + 5]
+            x, y = np.round(x - 0.5 * patchw), np.round(y - 0.5 * patchw)
+            [dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph] = self.pad(np.vstack([x, y, x + patchw - 1, y + patchw - 1]).T,
                                                                     width,
                                                                     height)
             for j in range(num_box):
                 tmpim = np.zeros((tmpw[j], tmpw[j], 3), dtype=np.float32)
-                tmpim[dy[j]:edy[j]+1, dx[j]:edx[j]+1, :] = img[y[j]:ey[j]+1, x[j]:ex[j]+1, :]
-                input_buf[j, i*3:i*3+3, :, :] = adjust_input(cv2.resize(tmpim, (24, 24)))
+                tmpim[dy[j]:edy[j] + 1, dx[j]:edx[j] + 1, :] = img[y[j]:ey[j] + 1, x[j]:ex[j] + 1, :]
+                input_buf[j, i * 3:i * 3 + 3, :, :] = adjust_input(cv2.resize(tmpim, (24, 24)))
 
         output = self.LNet.predict(input_buf)
 
@@ -378,90 +381,16 @@ class MtcnnDetector(object):
 
         for k in range(5):
             # do not make a large movement
-            tmp_index = np.where(np.abs(output[k]-0.5) > 0.35)
+            tmp_index = np.where(np.abs(output[k] - 0.5) > 0.35)
             output[k][tmp_index[0]] = 0.5
 
-            pointx[:, k] = np.round(points[:, k] - 0.5*patchw) + output[k][:, 0]*patchw
-            pointy[:, k] = np.round(points[:, k+5] - 0.5*patchw) + output[k][:, 1]*patchw
+            pointx[:, k] = np.round(points[:, k] - 0.5 * patchw) + output[k][:, 0] * patchw
+            pointy[:, k] = np.round(points[:, k + 5] - 0.5 * patchw) + output[k][:, 1] * patchw
 
         points = np.hstack([pointx, pointy])
         points = points.astype(np.int32)
 
         return total_boxes, points
-
-    def list2colmatrix(self, pts_list):
-        """
-            convert list to column matrix
-        Parameters:
-        ----------
-            pts_list:
-                input list
-        Retures:
-        -------
-            colMat: 
-
-        """
-        assert len(pts_list) > 0
-        colMat = []
-        for i in range(len(pts_list)):
-            colMat.append(pts_list[i][0])
-            colMat.append(pts_list[i][1])
-        colMat = np.matrix(colMat).transpose()
-        return colMat
-
-    def find_tfrom_between_shapes(self, from_shape, to_shape):
-        """
-            find transform between shapes
-        Parameters:
-        ----------
-            from_shape: 
-            to_shape: 
-        Retures:
-        -------
-            tran_m:
-            tran_b:
-        """
-        assert from_shape.shape[0] == to_shape.shape[0] and from_shape.shape[0] % 2 == 0
-
-        sigma_from = 0.0
-        sigma_to = 0.0
-        cov = np.matrix([[0.0, 0.0], [0.0, 0.0]])
-
-        # compute the mean and cov
-        from_shape_points = from_shape.reshape(from_shape.shape[0]/2, 2)
-        to_shape_points = to_shape.reshape(to_shape.shape[0]/2, 2)
-        mean_from = from_shape_points.mean(axis=0)
-        mean_to = to_shape_points.mean(axis=0)
-
-        for i in range(from_shape_points.shape[0]):
-            temp_dis = np.linalg.norm(from_shape_points[i] - mean_from)
-            sigma_from += temp_dis * temp_dis
-            temp_dis = np.linalg.norm(to_shape_points[i] - mean_to)
-            sigma_to += temp_dis * temp_dis
-            cov += (to_shape_points[i].transpose() - mean_to.transpose()) * (from_shape_points[i] - mean_from)
-
-        sigma_from = sigma_from / to_shape_points.shape[0]
-        sigma_to = sigma_to / to_shape_points.shape[0]
-        cov = cov / to_shape_points.shape[0]
-
-        # compute the affine matrix
-        s = np.matrix([[1.0, 0.0], [0.0, 1.0]])
-        u, d, vt = np.linalg.svd(cov)
-
-        if np.linalg.det(cov) < 0:
-            if d[1] < d[0]:
-                s[1, 1] = -1
-            else:
-                s[0, 0] = -1
-        r = u * s * vt
-        c = 1.0
-        if sigma_from != 0:
-            c = 1.0 / sigma_from * np.trace(np.diag(d) * s)
-
-        tran_b = mean_to.transpose() - c * r * mean_from.transpose()
-        tran_m = c * r
-
-        return tran_m, tran_b
 
     def extract_image_chips(self, img, points, desired_size=256, padding=0):
         """
@@ -480,10 +409,10 @@ class MtcnnDetector(object):
         """
         crop_imgs = []
         for p in points:
-            shape  =[]
-            for k in range(len(p)/2):
+            shape = []
+            for k in range(len(p) // 2):
                 shape.append(p[k])
-                shape.append(p[k+5])
+                shape.append(p[k + 5])
 
             if padding > 0:
                 padding = padding
@@ -496,39 +425,18 @@ class MtcnnDetector(object):
             from_points = []
             to_points = []
 
-            for i in range(len(shape)/2):
+            for i in range(len(shape) // 2):
                 x = (padding + mean_face_shape_x[i]) / (2 * padding + 1) * desired_size
                 y = (padding + mean_face_shape_y[i]) / (2 * padding + 1) * desired_size
                 to_points.append([x, y])
-                from_points.append([shape[2*i], shape[2*i+1]])
+                from_points.append([shape[2 * i], shape[2 * i + 1]])
 
-            # convert the points to Mat
-            from_mat = self.list2colmatrix(from_points)
-            to_mat = self.list2colmatrix(to_points)
-
-            # compute the similar transfrom
-            tran_m, tran_b = self.find_tfrom_between_shapes(from_mat, to_mat)
-
-            probe_vec = np.matrix([1.0, 0.0]).transpose()
-            probe_vec = tran_m * probe_vec
-
-            scale = np.linalg.norm(probe_vec)
-            angle = 180.0 / math.pi * math.atan2(probe_vec[1, 0], probe_vec[0, 0])
-
-            from_center = [(shape[0]+shape[2])/2.0, (shape[1]+shape[3])/2.0]
-            to_center = [0, 0]
-            to_center[1] = desired_size * 0.4
-            to_center[0] = desired_size * 0.5
-
-            ex = to_center[0] - from_center[0]
-            ey = to_center[1] - from_center[1]
-
-            rot_mat = cv2.getRotationMatrix2D((from_center[0], from_center[1]), -1*angle, scale)
-            rot_mat[0][2] += ex
-            rot_mat[1][2] += ey
-
-            chips = cv2.warpAffine(img, rot_mat, (desired_size, desired_size))
-            crop_imgs.append(chips)
+            dst = np.array(to_points, dtype=np.float32).reshape(5, 2)
+            src = np.array(from_points, dtype=np.float32).reshape(5, 2)
+            tform = transform.SimilarityTransform()
+            tform.estimate(src, dst)
+            M = tform.params[0:2, :]
+            warped = cv2.warpAffine(img, M, (desired_size, desired_size), borderValue=0.0)
+            crop_imgs.append(warped)
 
         return crop_imgs
-
