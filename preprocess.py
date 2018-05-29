@@ -1,6 +1,7 @@
 # coding: utf-8
 import argparse
 import os
+import random
 import shutil
 
 import cv2
@@ -19,6 +20,7 @@ def get_args():
     parser.add_argument('--ngpus', default=-1, type=int, help='how many gpus to use')
     parser.add_argument('--size', default=128, type=int, help='output image is (size,size)')
     parser.add_argument('--padding', default=0.37, type=float, help='padding')
+    parser.add_argument('--split', default=0, type=float, help='split ratio')
     args = parser.parse_args()
     return args
 
@@ -29,10 +31,10 @@ def main():
     if not os.path.exists(src_dir):
         raise ValueError("src dir not exist {}".format(src_dir))
 
+    split_ratio = args.split
+
     dst_dir = os.path.abspath(args.dst)
-    os.makedirs(dst_dir, exist_ok=True)
     err_dir = os.path.abspath(args.err)
-    os.makedirs(err_dir, exist_ok=True)
 
     num_gpus = args.ngpus
     if num_gpus == -1:
@@ -47,15 +49,15 @@ def main():
 
     for root, dirs, files in os.walk(src_dir):
         relpath = os.path.relpath(root, src_dir)
-        dd = os.path.join(dst_dir, relpath)
+        # dd = os.path.join(dst_dir, relpath)
         ed = os.path.join(err_dir, relpath)
-        dd_exist = os.path.exists(dd)
-        ed_exist = os.path.exists(ed)
+        class_data_written = False  # training
         for filename in files:
             if filename.lower().endswith(('.jpg', '.jpeg', '.gif', '.png')):
                 absfile = os.path.join(root, filename)
                 success = False
                 try:
+                    # warning cv2.imread does not handle file names with unicode characters.
                     img = cv2.imread(absfile)
 
                     # run detector
@@ -69,24 +71,37 @@ def main():
                         bigbox_idx = np.argmax([(b[2] - b[0]) * (b[3] - b[1]) for b in total_boxes])
 
                         # extract aligned face chips
-                        chips = detector.extract_image_chips(img, points[bigbox_idx:bigbox_idx + 1], args.size, args.padding)
+                        chips = detector.extract_image_chips(img, points[bigbox_idx:bigbox_idx + 1], args.size,
+                                                             args.padding)
                         for i, chip in enumerate(chips):
-                            if not dd_exist:
+                            if split_ratio > 0:
+                                if not class_data_written:
+                                    ab = "train"
+                                    class_data_written = True
+                                    # let validation set has same class label as training set
+                                    # see source code of pytorch's DatasetFolder
+                                    os.makedirs(os.path.join(dst_dir, "val", relpath), exist_ok=True)
+                                else:
+                                    ab = "val" if random.random() > split_ratio else "train"
+                                dd = os.path.join(dst_dir, ab, relpath)
                                 os.makedirs(dd, exist_ok=True)
-                                dd_exist = True
-                            cv2.imwrite(os.path.join(dd, os.path.splitext(filename)[0] + ".png"), chip)
+                                cv2.imwrite(os.path.join(dd, os.path.splitext(filename)[0] + ".png"),
+                                            chip)
+                                class_data_written = True
+                            else:
+                                dd = os.path.join(dst_dir, relpath)
+                                os.makedirs(dd, exist_ok=True)
+                                cv2.imwrite(os.path.join(dd, os.path.splitext(filename)[0] + ".png"),
+                                            chip)
                             success = True
 
-                except:
+                except Exception as e:
+                    print(relpath, filename, e)
                     pass
 
                 if not success:
-                    if not ed_exist:
-                        os.makedirs(ed, exist_ok=True)
-                        ed_exist = True
+                    os.makedirs(ed, exist_ok=True)
                     shutil.copyfile(absfile, os.path.join(ed, filename))
-
-                    pass
 
 
 if __name__ == '__main__':
