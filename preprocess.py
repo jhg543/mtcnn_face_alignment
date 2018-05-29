@@ -44,9 +44,10 @@ def main():
     else:
         ctx = [mx.gpu(i) for i in range(num_gpus)]
 
-    print("src dir={} dst dir={} err_dir={}".format(src_dir, dst_dir, err_dir))
+    print("src dir={} dst dir={} err_dir={} gpu={}".format(src_dir, dst_dir, err_dir, num_gpus))
     detector = MtcnnDetector(model_folder='model', ctx=ctx, num_worker=args.workers, accurate_landmark=False)
 
+    file_count = 0
     for root, dirs, files in os.walk(src_dir):
         relpath = os.path.relpath(root, src_dir)
         # dd = os.path.join(dst_dir, relpath)
@@ -102,6 +103,10 @@ def main():
                 if not success:
                     os.makedirs(ed, exist_ok=True)
                     shutil.copyfile(absfile, os.path.join(ed, filename))
+
+                file_count = file_count + 1
+                if file_count % 1000 == 0:
+                    print(file_count)
 
 
 if __name__ == '__main__':
